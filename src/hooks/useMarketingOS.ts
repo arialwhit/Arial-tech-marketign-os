@@ -61,7 +61,29 @@ import type {
 
 const LOCAL_STORAGE_KEY = "mos-workspace-state-v3";
 const USER_ACTIVE_WS_PREFIX = "mos-user-active-ws:";
+const ACCOUNT_WS_PREFIX = "mos-account-workspace:";
 const WS_CACHE_PREFIX = "mos-ws-data:";
+
+function workspaceIsEstablished(ws: Partial<WorkspaceProfile> | null | undefined): boolean {
+  if (!ws) return false;
+  const name = (ws.name || "").trim();
+  const hasBusiness =
+    (ws.websiteUrl || "").trim().length > 3 ||
+    (ws.description || "").trim().length >= 20 ||
+    (ws.products || []).length > 0;
+  return Boolean(ws.onboarded) || (name.length > 1 && hasBusiness);
+}
+
+function readAccountWorkspace(uid: string): WorkspaceProfile | null {
+  try {
+    const raw = localStorage.getItem(`${ACCOUNT_WS_PREFIX}${uid}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as WorkspaceProfile;
+    return parsed?.id ? parsed : null;
+  } catch {
+    return null;
+  }
+}
 
 function safeId(prefix: string): string {
   const rand = Math.random().toString(36).slice(2, 9);
@@ -161,6 +183,7 @@ function createEmptyLocalState(): PersistedLocalState {
 export function useMarketingOS() {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
+  const [workspacesResolved, setWorkspacesResolved] = useState(false);
   const [firestoreOnline, setFirestoreOnline] = useState(false);
 
   const [modelCatalog, setModelCatalog] = useState<ModelCatalog>(DEFAULT_MODEL_CATALOG);
@@ -267,6 +290,18 @@ export function useMarketingOS() {
   useEffect(() => {
     setActiveWorkspaceHeaderId(workspace.id || "default");
   }, [workspace.id]);
+
+  useEffect(() => {
+    if (!authUser || !workspaceIsEstablished(workspace)) return;
+    try {
+      localStorage.setItem(
+        `${ACCOUNT_WS_PREFIX}${authUser.uid}`,
+        JSON.stringify({ ...workspace, ownerId: authUser.uid, onboarded: true }),
+      );
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [authUser, workspace]);
 
   // Persist workspace state locally + per-workspace cache
   useEffect(() => {
@@ -764,8 +799,10 @@ export function useMarketingOS() {
   useEffect(() => {
     if (!authReady || !authUser) {
       setSavedWorkspaces([]);
+      setWorkspacesResolved(!authUser && authReady);
       return;
     }
+    setWorkspacesResolved(false);
     const q = query(collection(db, "workspaces"), where("ownerId", "==", authUser.uid));
     const unsub = onSnapshot(
       q,
@@ -773,47 +810,74 @@ export function useMarketingOS() {
         const list = snap.docs.map((d) => d.data() as WorkspaceProfile);
         setSavedWorkspaces(list);
 
+        const finish = () => setWorkspacesResolved(true);
         if (userSwitchedWorkspaceRef.current) {
           userSwitchedWorkspaceRef.current = false;
+          finish();
           return;
         }
 
         const curWs = latestWorkspaceRef.current;
-        const alreadyOnOwned = list.some((w) => w.id === curWs.id);
-        if (alreadyOnOwned) {
-          return;
+        let localPref = "";
+        try {
+          localPref = localStorage.getItem(`${USER_ACTIVE_WS_PREFIX}${authUser.uid}`) || "";
+        } catch {
+          localPref = "";
         }
+        const preferredId = savedActiveWorkspaceIdRef.current || localPref;
+        const established = list.filter((w) => workspaceIsEstablished(w));
+        const cloudTarget =
+          (preferredId && established.find((w) => w.id === preferredId)) ||
+          established[0] ||
+          (preferredId && list.find((w) => w.id === preferredId)) ||
+          null;
+        const savedLocal = readAccountWorkspace(authUser.uid);
+        const localTarget = workspaceIsEstablished(curWs)
+          ? curWs
+          : savedLocal && workspaceIsEstablished(savedLocal)
+            ? savedLocal
+            : null;
 
-        if (list.length > 0) {
-          // Automatically reconnect the signed-in account to its active persistent workspace
-          let localPref = "";
-          try {
-            localPref = localStorage.getItem(`${USER_ACTIVE_WS_PREFIX}${authUser.uid}`) || "";
-          } catch {
-            localPref = "";
-          }
-          const preferredId = savedActiveWorkspaceIdRef.current || localPref;
-          const target = (preferredId && list.find((w) => w.id === preferredId)) || list[0];
-          restoreWorkspaceSession(target);
-          void syncUserActiveWorkspace(authUser.uid, target.id);
-          return;
-        }
-
-        // No saved workspaces in Firestore yet for this user:
-        // 1) Claim any already-onboarded unowned local workspace
-        if (!curWs.ownerId && curWs.name.trim() && curWs.onboarded) {
-          const claimed: WorkspaceProfile = {
-            ...curWs,
+        const openEstablished = (ws: WorkspaceProfile) => {
+          const base = createDefaultWorkspace(authUser.uid);
+          const ready: WorkspaceProfile = {
+            ...base,
+            ...ws,
+            id: ws.id || base.id,
             ownerId: authUser.uid,
+            name: (ws.name || "").trim() || base.name,
+            websiteUrl: ws.websiteUrl || "",
+            description: ws.description || "",
+            products: ws.products || [],
+            objectives: ws.objectives || [],
+            channels: ws.channels || [],
+            onboarded: true,
+            isDemo: false,
           };
-          setWorkspace(claimed);
-          void persistWorkspaceToCloud(claimed, undefined, authUser).then(() =>
-            syncUserActiveWorkspace(authUser.uid, claimed.id),
+          restoreWorkspaceSession(ready);
+          void persistWorkspaceToCloud(ready, undefined, authUser).then(() =>
+            syncUserActiveWorkspace(authUser.uid, ready.id),
           );
+        };
+
+        if (cloudTarget && workspaceIsEstablished(cloudTarget)) {
+          const alreadyHere = curWs.id === cloudTarget.id && curWs.onboarded;
+          if (!alreadyHere) openEstablished(cloudTarget);
+          finish();
           return;
         }
 
-        // 2) For Google sign-ins with zero prior workspaces, auto-create a persistent workspace bound to the Google account
+        if (localTarget) {
+          openEstablished(localTarget);
+          finish();
+          return;
+        }
+
+        if (list.some((w) => w.id === curWs.id)) {
+          finish();
+          return;
+        }
+
         if (isGoogleSignedInUser(authUser) && autoProvisionedForUidRef.current !== authUser.uid) {
           autoProvisionedForUidRef.current = authUser.uid;
           const emailPrefix = authUser.email?.split("@")[0] || "";
@@ -837,9 +901,20 @@ export function useMarketingOS() {
             syncUserActiveWorkspace(authUser.uid, autoWs.id),
           );
         }
+        finish();
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, "workspaces");
+        const saved = readAccountWorkspace(authUser.uid);
+        if (saved && workspaceIsEstablished(saved)) {
+          restoreWorkspaceSession({
+            ...saved,
+            ownerId: authUser.uid,
+            onboarded: true,
+            isDemo: false,
+          });
+        }
+        setWorkspacesResolved(true);
+        console.error("Workspace list failed", error);
       },
     );
     return () => unsub();
@@ -1252,6 +1327,18 @@ export function useMarketingOS() {
   );
 
   const signOutAccount = useCallback(async () => {
+    const uid = authUser?.uid || "";
+    const current = latestWorkspaceRef.current;
+    if (uid && workspaceIsEstablished(current)) {
+      try {
+        localStorage.setItem(
+          `${ACCOUNT_WS_PREFIX}${uid}`,
+          JSON.stringify({ ...current, ownerId: uid, onboarded: true }),
+        );
+      } catch {
+        // Ignore storage quota errors
+      }
+    }
     await signOutGoogle();
     setActiveWorkspaceHeaderId("default");
     localStorage.removeItem(LOCAL_STORAGE_KEY);
@@ -1290,7 +1377,7 @@ export function useMarketingOS() {
     setPresenters([]);
     setWorkflows([]);
     setWorkflowExecutions([]);
-  }, []);
+  }, [authUser]);
 
   const deleteAccountFully = useCallback(async () => {
     if (!authUser) throw new Error("No authenticated user to delete.");
@@ -1309,6 +1396,7 @@ export function useMarketingOS() {
     localStorage.removeItem(LOCAL_STORAGE_KEY);
     localStorage.removeItem("mos-onboarded");
     localStorage.removeItem("mos-onboarding-draft-v1");
+    localStorage.removeItem(`${ACCOUNT_WS_PREFIX}${authUser.uid}`);
     setWorkspace(createDefaultWorkspace());
     setSavedWorkspaces([]);
     setMemories([]);
@@ -1318,6 +1406,7 @@ export function useMarketingOS() {
   return {
     authUser,
     authReady,
+    workspacesResolved,
     firestoreOnline,
     modelCatalog,
     geminiConfigured,

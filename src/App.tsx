@@ -1375,11 +1375,18 @@ export default function App() {
   }, [mos.workspace.id]);
 
   useEffect(() => {
-    if (mos.workspace.onboarded && !onboarded) {
+    const ws = mos.workspace;
+    const established =
+      Boolean(ws.onboarded) ||
+      ((ws.name || "").trim().length > 1 &&
+        ((ws.websiteUrl || "").trim().length > 3 ||
+          (ws.description || "").trim().length >= 20 ||
+          (ws.products || []).length > 0));
+    if (established && !onboarded && !creatingNewWorkspace) {
       setOnboarded(true);
       localStorage.setItem("mos-onboarded", "yes");
     }
-  }, [mos.workspace.onboarded, onboarded]);
+  }, [creatingNewWorkspace, mos.workspace, onboarded]);
 
   useEffect(() => {
     const initialPath = window.location.pathname.replace(/\/+$/, "") || "/";
@@ -1639,7 +1646,25 @@ export default function App() {
     }
   };
 
-  if (!onboarded || creatingNewWorkspace) {
+  if (!mos.authReady || (mos.authUser && !mos.workspacesResolved)) {
+    return (
+      <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
+        <div style={{ textAlign: "center" }}>
+          <b>Opening your workspace</b>
+          <p style={{ color: "var(--muted)", marginTop: 8 }}>Checking the account saved in your database.</p>
+        </div>
+      </div>
+    );
+  }
+
+  const savedBusiness =
+    Boolean(mos.workspace.onboarded) ||
+    ((mos.workspace.name || "").trim().length > 1 &&
+      ((mos.workspace.websiteUrl || "").trim().length > 3 ||
+        (mos.workspace.description || "").trim().length >= 20 ||
+        (mos.workspace.products || []).length > 0));
+
+  if (creatingNewWorkspace || (!onboarded && !savedBusiness)) {
     return (
       <>
         <OnboardingFlow
