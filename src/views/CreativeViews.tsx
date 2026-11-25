@@ -2653,13 +2653,14 @@ export function AvatarsView({
                 : "Generate Presenter Video (MP4) →"}
           </button>
           {generatedVideoUrl && (
-            <button
-              className="btn secondary"
-              style={{ marginTop: 8 }}
-              onClick={() => go("Video Editor")}
-            >
-              Open in Video Editor →
-            </button>
+            <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+              <a className="btn secondary" href={generatedVideoUrl} download>
+                ↓ Download MP4
+              </a>
+              <button className="btn secondary" type="button" onClick={() => go("Video Editor")}>
+                Open in Video Editor →
+              </button>
+            </div>
           )}
         </aside>
       </div>

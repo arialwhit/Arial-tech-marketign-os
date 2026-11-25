@@ -754,6 +754,9 @@ export function MediaLibraryView({
               <button className="btn ghost" onClick={() => setPreviewAsset(null)}>✕</button>
             </div>
             <div className="mos-modal-body">
+              <a className="btn secondary" href={previewAsset.url} download={previewAsset.name} style={{ marginBottom: 10 }}>
+                ↓ Download
+              </a>
               {previewAsset.kind === "video" ? (
                 <video
                   src={previewAsset.url}
