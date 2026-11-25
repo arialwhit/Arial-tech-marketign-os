@@ -1,0 +1,6 @@
+{
+  "name": "Marketing OS — AI Marketing Operating System",
+  "description": "Full-stack AI Marketing Operating System for market intelligence, SEO & ASO, strategy, content & video production, audience simulation, social publishing, Meta Ads, and growth analytics.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,219 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: deny everything by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'displayName', 'photoURL', 'activeWorkspaceId', 'createdAt', 'updatedAt']) &&
+        data.uid is string && data.uid == request.auth.uid && data.uid == userId &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 320 &&
+        (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 120)) &&
+        (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 1000)) &&
+        (!('activeWorkspaceId' in data) || (data.activeWorkspaceId is string && data.activeWorkspaceId.size() <= 128)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspace(data, workspaceId) {
+      return data.keys().hasAll(['id', 'ownerId', 'name', 'credits', 'plan', 'onboarded', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'id', 'ownerId', 'name', 'websiteUrl', 'industry', 'companySize',
+          'description', 'location', 'targetCountries', 'products', 'objectives',
+          'channels', 'positioning', 'valueProposition', 'brandVoiceNotes',
+          'wordsToUse', 'wordsToAvoid', 'voiceSliders',
+          'preferredTextModel', 'preferredImageModel', 'preferredVideoModel', 'preferredVoiceModel',
+          'credits', 'plan', 'onboarded', 'isDemo', 'createdAt', 'updatedAt'
+        ]) &&
+        data.id is string && data.id == workspaceId &&
+        data.ownerId is string && data.ownerId == request.auth.uid &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 140 &&
+        (!('websiteUrl' in data) || (data.websiteUrl is string && data.websiteUrl.size() <= 500)) &&
+        (!('industry' in data) || (data.industry is string && data.industry.size() <= 140)) &&
+        (!('companySize' in data) || (data.companySize is string && data.companySize.size() <= 80)) &&
+        (!('description' in data) || (data.description is string && data.description.size() <= 4000)) &&
+        (!('location' in data) || (data.location is string && data.location.size() <= 200)) &&
+        (!('targetCountries' in data) || (data.targetCountries is string && data.targetCountries.size() <= 400)) &&
+        (!('products' in data) || (data.products is list && data.products.size() <= 20)) &&
+        (!('objectives' in data) || (data.objectives is list && data.objectives.size() <= 20)) &&
+        (!('channels' in data) || (data.channels is list && data.channels.size() <= 20)) &&
+        (!('positioning' in data) || (data.positioning is string && data.positioning.size() <= 2000)) &&
+        (!('valueProposition' in data) || (data.valueProposition is string && data.valueProposition.size() <= 2000)) &&
+        (!('brandVoiceNotes' in data) || (data.brandVoiceNotes is string && data.brandVoiceNotes.size() <= 3000)) &&
+        (!('wordsToUse' in data) || (data.wordsToUse is string && data.wordsToUse.size() <= 500)) &&
+        (!('wordsToAvoid' in data) || (data.wordsToAvoid is string && data.wordsToAvoid.size() <= 500)) &&
+        (!('voiceSliders' in data) || (data.voiceSliders is list && data.voiceSliders.size() <= 10)) &&
+        (!('preferredTextModel' in data) || (data.preferredTextModel is string && data.preferredTextModel.size() <= 80)) &&
+        (!('preferredImageModel' in data) || (data.preferredImageModel is string && data.preferredImageModel.size() <= 80)) &&
+        (!('preferredVideoModel' in data) || (data.preferredVideoModel is string && data.preferredVideoModel.size() <= 80)) &&
+        (!('preferredVoiceModel' in data) || (data.preferredVoiceModel is string && data.preferredVoiceModel.size() <= 80)) &&
+        data.credits is number && data.credits >= 0 && data.credits <= 10000000 &&
+        data.plan in ['starter', 'pro', 'agency'] &&
+        data.onboarded is bool &&
+        (!('isDemo' in data) || data.isDemo == false) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspaceItem(data, workspaceId, itemId) {
+      return data.keys().hasAll(['id', 'workspaceId', 'ownerId', 'kind', 'title', 'status', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'id', 'workspaceId', 'ownerId', 'kind', 'title', 'status',
+          'sourceType', 'provider', 'payload', 'tags', 'score', 'creditsUsed',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.id is string && data.id == itemId &&
+        data.workspaceId is string && data.workspaceId == workspaceId &&
+        data.ownerId is string && data.ownerId == request.auth.uid &&
+        data.kind is string && data.kind.size() >= 1 && data.kind.size() <= 64 &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 240 &&
+        data.status is string && data.status.size() >= 1 && data.status.size() <= 64 &&
+        (!('sourceType' in data) || data.sourceType in ['live_api', 'live_crawl', 'ai_grounded', 'ai_simulation', 'imported', 'manual']) &&
+        (!('provider' in data) || (data.provider is string && data.provider.size() <= 100)) &&
+        (!('payload' in data) || data.payload is map) &&
+        (!('tags' in data) || (data.tags is list && data.tags.size() <= 25)) &&
+        (!('score' in data) || (data.score is number && data.score >= 0 && data.score <= 100)) &&
+        (!('creditsUsed' in data) || (data.creditsUsed is number && data.creditsUsed >= 0 && data.creditsUsed <= 100000)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Connection check document (read-only ping)
+    match /test/connection {
+      allow get: if true;
+      allow list, write: if false;
+    }
+
+    // Private User Profiles (PII isolated to owner; self-delete enabled for GDPR/account deletion)
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+      allow list: if false;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(userId) &&
+        request.auth.uid == userId &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName', 'photoURL', 'activeWorkspaceId', 'updatedAt'
+        ]);
+
+      allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+    }
+
+    // Business Workspaces
+    match /workspaces/{workspaceId} {
+      allow get: if isSignedIn() && isValidId(workspaceId) && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(workspaceId) &&
+        isValidWorkspace(incoming(), workspaceId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(workspaceId) &&
+        existing().ownerId == request.auth.uid &&
+        isValidWorkspace(incoming(), workspaceId) &&
+        incoming().id == existing().id &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'websiteUrl', 'industry', 'companySize', 'description',
+            'location', 'targetCountries', 'products', 'objectives', 'channels',
+            'positioning', 'valueProposition', 'brandVoiceNotes', 'wordsToUse',
+            'wordsToAvoid', 'voiceSliders', 'onboarded', 'updatedAt'
+          ]) ||
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'preferredTextModel', 'preferredImageModel', 'preferredVideoModel',
+            'preferredVoiceModel', 'updatedAt'
+          ]) ||
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'credits', 'plan', 'updatedAt'
+          ])
+        );
+
+      allow delete: if isVerifiedUser() && isValidId(workspaceId) && existing().ownerId == request.auth.uid;
+
+      // Workspace-Scoped Marketing Items (Notebook, Competitors, Trends, Content Projects, Calendar, Ads, Video Jobs, Integration Metadata, Runs)
+      match /items/{itemId} {
+        allow get: if isSignedIn() &&
+          isValidId(workspaceId) &&
+          isValidId(itemId) &&
+          existing().ownerId == request.auth.uid &&
+          get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.ownerId == request.auth.uid;
+
+        allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+
+        allow create: if isVerifiedUser() &&
+          isValidId(workspaceId) &&
+          isValidId(itemId) &&
+          isValidWorkspaceItem(incoming(), workspaceId, itemId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          exists(/databases/$(database)/documents/workspaces/$(workspaceId)) &&
+          get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.ownerId == request.auth.uid;
+
+        allow update: if isVerifiedUser() &&
+          isValidId(workspaceId) &&
+          isValidId(itemId) &&
+          existing().ownerId == request.auth.uid &&
+          !(existing().status in ['archived', 'published']) &&
+          get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.ownerId == request.auth.uid &&
+          isValidWorkspaceItem(incoming(), workspaceId, itemId) &&
+          incoming().id == existing().id &&
+          incoming().workspaceId == existing().workspaceId &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().kind == existing().kind &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'status', 'payload', 'tags', 'score', 'creditsUsed', 'sourceType', 'provider', 'updatedAt'
+            ])
+          );
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(workspaceId) &&
+          isValidId(itemId) &&
+          existing().ownerId == request.auth.uid &&
+          get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.ownerId == request.auth.uid;
+      }
+    }
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user profile with PII isolated to owner.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 320 },
+        "displayName": { "type": "string", "maxLength": 120 },
+        "photoURL": { "type": "string", "maxLength": 1000 },
+        "activeWorkspaceId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "createdAt", "updatedAt"]
+    },
+    "Workspace": {
+      "title": "Workspace",
+      "description": "Business workspace owning all marketing intelligence, creative projects, and billing credits.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "websiteUrl": { "type": "string", "maxLength": 500 },
+        "industry": { "type": "string", "maxLength": 140 },
+        "companySize": { "type": "string", "maxLength": 80 },
+        "description": { "type": "string", "maxLength": 4000 },
+        "location": { "type": "string", "maxLength": 200 },
+        "targetCountries": { "type": "string", "maxLength": 400 },
+        "positioning": { "type": "string", "maxLength": 2000 },
+        "valueProposition": { "type": "string", "maxLength": 2000 },
+        "brandVoiceNotes": { "type": "string", "maxLength": 3000 },
+        "wordsToUse": { "type": "string", "maxLength": 500 },
+        "wordsToAvoid": { "type": "string", "maxLength": 500 },
+        "preferredTextModel": { "type": "string", "maxLength": 80 },
+        "preferredImageModel": { "type": "string", "maxLength": 80 },
+        "preferredVideoModel": { "type": "string", "maxLength": 80 },
+        "preferredVoiceModel": { "type": "string", "maxLength": 80 },
+        "credits": { "type": "number" },
+        "plan": { "type": "string", "enum": ["starter", "pro", "agency"] },
+        "onboarded": { "type": "boolean" },
+        "isDemo": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "name", "credits", "plan", "onboarded", "createdAt", "updatedAt"]
+    },
+    "WorkspaceItem": {
+      "title": "WorkspaceItem",
+      "description": "Generic workspace-scoped marketing record (notebook sections, competitors, influencers, trends, audits, strategies, content projects, media assets, scheduled posts, ad campaigns, automations, video jobs, integration connection metadata without OAuth secrets, notifications, audit logs, AI runs, credit transactions).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "kind": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "title": { "type": "string", "maxLength": 240 },
+        "status": { "type": "string", "maxLength": 64 },
+        "sourceType": { "type": "string", "enum": ["live_api", "live_crawl", "ai_grounded", "ai_simulation", "imported", "manual"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "workspaceId", "ownerId", "kind", "title", "status", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Owner-only private user profile."
+    },
+    "/workspaces/{workspaceId}": {
+      "schema": { "$ref": "#/entities/Workspace" },
+      "description": "Root business workspace owned by a user."
+    },
+    "/workspaces/{workspaceId}/items/{itemId}": {
+      "schema": { "$ref": "#/entities/WorkspaceItem" },
+      "description": "Workspace-scoped marketing records across notebook, competitors, influencers, trends, seo, strategy, content projects, media assets, calendar/queue posts, ad campaigns, video jobs, integration metadata, notifications, automations, AI runs, and credit transactions."
+    }
+  }
+}
