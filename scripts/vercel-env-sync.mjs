@@ -123,6 +123,90 @@ export function collectSyncEntries(mergedEnv) {
   return { configured, missing };
 }
 
+async function vercelApi(url, token, options = {}) {
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`Vercel HTTP ${res.status}: ${text.slice(0, 300)}`);
+  }
+  return text ? JSON.parse(text) : {};
+}
+
+function writeProjectLink(cwd, project) {
+  const linkDir = path.resolve(cwd, ".vercel");
+  fs.mkdirSync(linkDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(linkDir, "project.json"),
+    JSON.stringify(
+      {
+        projectId: project.id,
+        orgId: project.accountId || "",
+        projectName: project.name,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+async function ensureVercelProject({ cwd, token, orgId, projectId }) {
+  const teamQuery = orgId ? `?teamId=${encodeURIComponent(orgId)}` : "";
+  if (projectId) {
+    const project = await vercelApi(
+      `https://api.vercel.com/v9/projects/${encodeURIComponent(projectId)}${teamQuery}`,
+      token,
+    );
+    writeProjectLink(cwd, project);
+    return { projectId: project.id, orgId: project.accountId || orgId || "", name: project.name };
+  }
+
+  const listQuery = teamQuery ? `${teamQuery}&limit=50` : "?limit=50";
+  const list = await vercelApi(`https://api.vercel.com/v9/projects${listQuery}`, token);
+  const existing = (list.projects || []).find((project) => project.name === "arial-tech-marketign-os");
+  if (existing) {
+    writeProjectLink(cwd, existing);
+    return { projectId: existing.id, orgId: existing.accountId || orgId || "", name: existing.name };
+  }
+
+  const createBody = {
+    name: "arial-tech-marketign-os",
+    framework: "vite",
+    gitRepository: { type: "github", repo: "arialwhit/Arial-tech-marketign-os" },
+  };
+  let created;
+  try {
+    created = await vercelApi(`https://api.vercel.com/v11/projects${teamQuery}`, token, {
+      method: "POST",
+      body: JSON.stringify(createBody),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`Git-linked project create skipped: ${message}`);
+    created = await vercelApi(`https://api.vercel.com/v11/projects${teamQuery}`, token, {
+      method: "POST",
+      body: JSON.stringify({ name: createBody.name, framework: createBody.framework }),
+    });
+  }
+  writeProjectLink(cwd, created);
+  return { projectId: created.id, orgId: created.accountId || orgId || "", name: created.name };
+}
+
+function productionEntries(entries, projectName) {
+  if (!projectName) return entries;
+  return entries.map((entry) => {
+    if (entry.key !== "APP_URL") return entry;
+    if (!/localhost|127\.0\.0\.1/i.test(entry.value)) return entry;
+    return { ...entry, value: `https://${projectName}.vercel.app` };
+  });
+}
+
 function resolveVercelProjectLink(cwd, mergedEnv) {
   let projectId = (mergedEnv.VERCEL_PROJECT_ID || "").trim();
   let orgId = (mergedEnv.VERCEL_ORG_ID || "").trim();
@@ -254,11 +338,16 @@ export async function runCli(argv = process.argv.slice(2), cwd = process.cwd()) 
   }
 
   const token = (mergedEnv.VERCEL_TOKEN || "").trim();
-  const { projectId, orgId } = resolveVercelProjectLink(cwd, mergedEnv);
+  let { projectId, orgId } = resolveVercelProjectLink(cwd, mergedEnv);
+  let entries = configured;
 
-  if (token && projectId) {
-    console.log(`Syncing ${configured.length} env var(s) to Vercel project ${projectId} via REST API…`);
-    await upsertViaVercelApi({ entries: configured, targets, token, projectId, orgId });
+  if (token) {
+    const project = await ensureVercelProject({ cwd, token, orgId, projectId });
+    projectId = project.projectId;
+    orgId = project.orgId || orgId;
+    entries = productionEntries(configured, project.name);
+    console.log(`Syncing ${entries.length} env var(s) to Vercel project ${project.name || projectId}…`);
+    await upsertViaVercelApi({ entries, targets, token, projectId, orgId });
     console.log("✓ Vercel environment variables synced via API.");
   } else {
     console.log(`Syncing ${configured.length} env var(s) via linked Vercel CLI…`);
