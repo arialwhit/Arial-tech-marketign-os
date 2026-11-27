@@ -23,5 +23,5 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "exclude": ["dist", "server.js"]
+  "exclude": ["dist", "server.js", "api/ensure-runtime-deps.ts"]
 }

@@ -1,12 +1,24 @@
 import type { IncomingMessage, ServerResponse } from "http";
-import { createMarketingOsApp } from "../server.js";
+import "./ensure-runtime-deps.js";
 
 type RequestHandler = (req: IncomingMessage, res: ServerResponse) => void;
 
 let appPromise: Promise<RequestHandler> | null = null;
 
+process.on("unhandledRejection", (err) => {
+  console.error("Unhandled rejection in Marketing OS function:", err);
+});
+
+function sendJson(res: ServerResponse, status: number, body: Record<string, unknown>) {
+  if (res.headersSent) return;
+  res.statusCode = status;
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify(body));
+}
+
 async function resolveAppHandler(): Promise<RequestHandler> {
-  const app = await createMarketingOsApp();
+  const loaded = await import("../server.js");
+  const app = await loaded.createMarketingOsApp();
   return app as unknown as RequestHandler;
 }
 
@@ -32,34 +44,22 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       try {
         app(req, res);
       } catch (dispatchErr) {
-        if (!res.headersSent) {
-          res.statusCode = 500;
-          res.setHeader("Content-Type", "application/json");
-          res.end(
-            JSON.stringify({
-              error:
-                dispatchErr instanceof Error
-                  ? dispatchErr.message
-                  : "Unexpected API handler error",
-            }),
-          );
-        }
+        sendJson(res, 500, {
+          error:
+            dispatchErr instanceof Error
+              ? dispatchErr.message
+              : "Unexpected API handler error",
+        });
         done();
       }
     });
   } catch (err) {
     console.error("Vercel API bootstrap error:", err);
-    if (!res.headersSent) {
-      res.statusCode = 500;
-      res.setHeader("Content-Type", "application/json");
-      res.end(
-        JSON.stringify({
-          error:
-            err instanceof Error
-              ? `Server initialization failed: ${err.message}`
-              : "Server initialization failed.",
-        }),
-      );
-    }
+    sendJson(res, 500, {
+      error:
+        err instanceof Error
+          ? `Server initialization failed: ${err.message}`
+          : "Server initialization failed.",
+    });
   }
 }

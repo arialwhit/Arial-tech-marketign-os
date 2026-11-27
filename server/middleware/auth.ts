@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
+import type { Credential } from "firebase-admin/app";
 import { getApp, getApps, initializeApp } from "firebase-admin/app";
 import { getAuth, type DecodedIdToken } from "firebase-admin/auth";
 import { stateStore } from "../services/stateStore.js";
@@ -15,8 +16,18 @@ const isPlaceholderProject = isPlaceholderFirebaseProject();
 if (!isPlaceholderProject) {
   try {
     if (!getApps().length) {
+      // A local credential stops Firebase Admin from calling the Vercel metadata
+      // server for application default credentials. That lookup hangs and the
+      // platform kills the function before any route can answer.
+      const credential: Credential = {
+        getAccessToken: async () => ({
+          access_token: "not-used",
+          expires_in: 3600,
+        }),
+      };
       initializeApp({
         projectId: firebaseConfig.projectId,
+        credential,
       });
     }
   } catch (err) {
