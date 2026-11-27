@@ -22,7 +22,7 @@ import {
 import { stateStore } from "../services/stateStore.js";
 import { normalizeAndAssertPublicUrl, safePublicFetch } from "../utils/ssrf.js";
 import { fetchOpenGraphImage } from "../utils/openGraph.js";
-import { resolveFfprobeBin, resolveSafeUploadCandidate } from "../utils/paths.js";
+import { isVercelRuntime, resolveFfprobeBin, resolveSafeUploadCandidate } from "../utils/paths.js";
 
 const execFileAsync = promisify(execFile);
 const router = Router();
@@ -44,10 +44,35 @@ async function checkUrlExists(url: string): Promise<boolean> {
   }
 }
 
-export async function crawlUrl(targetUrl: string) {
+async function readHtmlLimited(response: Response, maxChars: number, timeoutMs: number): Promise<string> {
+  const body = response.body;
+  if (!body) return (await response.text()).slice(0, maxChars);
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let html = "";
+  const started = Date.now();
+  try {
+    while (html.length < maxChars && Date.now() - started < timeoutMs) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) html += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      // The body is already closed.
+    }
+  }
+  return html.slice(0, maxChars);
+}
+
+export async function crawlUrl(targetUrl: string, options?: { fast?: boolean }) {
+  const fast = Boolean(options?.fast);
+  const timeoutMs = fast ? 8000 : 12000;
   const safeTarget = await normalizeAndAssertPublicUrl(targetUrl);
   const { response: res, finalUrl, ttfbMs } = await safePublicFetch(safeTarget, {
-    timeoutMs: 12000,
+    timeoutMs,
     headers: {
       "User-Agent":
         "Mozilla/5.0 (compatible; MarketingOSBot/1.0; +https://marketingos.app)",
@@ -58,7 +83,7 @@ export async function crawlUrl(targetUrl: string) {
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} while fetching ${finalUrl}`);
   }
-  const html = await res.text();
+  const html = await readHtmlLimited(res, fast ? 500_000 : 1_200_000, timeoutMs);
   const tracking = detectTrackingTechnologies(html);
   const $ = cheerio.load(html);
   $("script, style, noscript, svg").remove();
@@ -96,38 +121,41 @@ export async function crawlUrl(targetUrl: string) {
   ).length;
 
   const origin = parsedFinal.origin;
-  const [robotsTxtFound, sitemapXmlFound] = await Promise.all([
-    checkUrlExists(`${origin}/robots.txt`),
-    checkUrlExists(`${origin}/sitemap.xml`),
-  ]);
-
-  // Check up to 5 sampled links for broken HTTP status (non-blocking)
-  const candidateLinks: string[] = [];
-  for (const href of links) {
-    if (href.startsWith("#") || href.startsWith("mailto:") || href.startsWith("tel:")) continue;
-    try {
-      const abs = new URL(href, origin).toString();
-      if (/^https?:\/\//i.test(abs) && !candidateLinks.includes(abs)) {
-        candidateLinks.push(abs);
-      }
-      if (candidateLinks.length >= 5) break;
-    } catch {
-      // skip malformed href
-    }
-  }
+  let robotsTxtFound = false;
+  let sitemapXmlFound = false;
   const brokenLinks: string[] = [];
-  await Promise.all(
-    candidateLinks.map(async (linkUrl) => {
+  if (!fast) {
+    [robotsTxtFound, sitemapXmlFound] = await Promise.all([
+      checkUrlExists(`${origin}/robots.txt`),
+      checkUrlExists(`${origin}/sitemap.xml`),
+    ]);
+
+    const candidateLinks: string[] = [];
+    for (const href of links) {
+      if (href.startsWith("#") || href.startsWith("mailto:") || href.startsWith("tel:")) continue;
       try {
-        const check = await safePublicFetch(linkUrl, { timeoutMs: 4000, method: "HEAD" });
-        if (check.response.status >= 400 && check.response.status !== 405) {
-          brokenLinks.push(`${linkUrl} (HTTP ${check.response.status})`);
+        const abs = new URL(href, origin).toString();
+        if (/^https?:\/\//i.test(abs) && !candidateLinks.includes(abs)) {
+          candidateLinks.push(abs);
         }
+        if (candidateLinks.length >= 5) break;
       } catch {
-        // ignore network timeout on third-party link check
+        // skip malformed href
       }
-    }),
-  );
+    }
+    await Promise.all(
+      candidateLinks.map(async (linkUrl) => {
+        try {
+          const check = await safePublicFetch(linkUrl, { timeoutMs: 4000, method: "HEAD" });
+          if (check.response.status >= 400 && check.response.status !== 405) {
+            brokenLinks.push(`${linkUrl} (HTTP ${check.response.status})`);
+          }
+        } catch {
+          // ignore network timeout on third-party link check
+        }
+      }),
+    );
+  }
 
   const bodyText = $("body")
     .text()
@@ -197,11 +225,12 @@ export async function executeBusinessIntelligenceAnalysis(params: {
   params.onStageProgress?.("Validating & normalizing website URL", 15);
   const target = await normalizeAndAssertPublicUrl(String(websiteUrl || ""));
 
+  const hosted = isVercelRuntime();
   params.onStageProgress?.("Crawling public website & metadata", 35);
   let crawled: Awaited<ReturnType<typeof crawlUrl>> | null = null;
   let crawlError = "";
   try {
-    crawled = await crawlUrl(target);
+    crawled = await crawlUrl(target, { fast: hosted });
   } catch (err) {
     crawlError = err instanceof Error ? err.message : String(err);
   }
@@ -261,14 +290,14 @@ Return a strict JSON object matching the schema.`;
       model: selectedModel,
       creditsEstimated: 80,
     },
-    () =>
-      ai.models.generateContent({
+    () => {
+      const generation = ai.models.generateContent({
         model: selectedModel,
         contents: prompt,
         config: {
           systemInstruction:
             "You are a senior brand strategist and marketing intelligence analyst. Base claims on crawled facts and provided inputs; never invent fake metrics.",
-          thinkingConfig: thinkingConfigForModel(selectedModel, "medium"),
+          thinkingConfig: thinkingConfigForModel(selectedModel, hosted ? "low" : "medium"),
           ...(crawled ? {} : { tools: [{ googleSearch: {} }] }),
           responseMimeType: "application/json",
           responseSchema: {
@@ -301,7 +330,18 @@ Return a strict JSON object matching the schema.`;
             },
           },
         },
-      }),
+      });
+      if (!hosted) return generation;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timed = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error("Hosted analysis ran out of time before Gemini returned. Retry the scan."));
+        }, 22000);
+      });
+      return Promise.race([generation, timed]).finally(() => {
+        if (timer) clearTimeout(timer);
+      });
+    },
   );
 
   const parsed = parseJsonSafe<Record<string, unknown>>(response.text);

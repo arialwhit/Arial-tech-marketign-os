@@ -409,7 +409,24 @@ async function runBusinessIntelligenceJobAsync(jobId: string): Promise<void> {
   }
 }
 
+function sendJobFailure(res: import("express").Response, err: unknown) {
+  if (res.headersSent) return;
+  const formatted = formatGeminiError(err);
+  res.status(200).json({
+    executionMode: isVercelRuntime() ? "inline" : "background",
+    job: {
+      status: "failed",
+      stage: "Analysis failed",
+      error: formatted.message,
+      progressPct: 0,
+      completedStages: [],
+      pendingStages: [],
+    },
+  });
+}
+
 router.post("/jobs/business-intelligence", async (req: AuthenticatedRequest, res) => {
+  try {
   const ctx = assertWorkspaceAccess(req, res);
   if (!ctx) return;
   const input = (req.body || {}) as Record<string, unknown>;
@@ -450,6 +467,9 @@ router.post("/jobs/business-intelligence", async (req: AuthenticatedRequest, res
 
   void runBusinessIntelligenceJobAsync(job.id);
   res.status(202).json({ job, executionMode: "background" });
+  } catch (err) {
+    sendJobFailure(res, err);
+  }
 });
 
 router.get("/jobs", (req: AuthenticatedRequest, res) => {
@@ -472,6 +492,7 @@ router.get("/jobs/:id", (req: AuthenticatedRequest, res) => {
 });
 
 router.post("/jobs/:id/retry", async (req: AuthenticatedRequest, res) => {
+  try {
   const ctx = assertWorkspaceAccess(req, res);
   if (!ctx) return;
   const job = stateStore.getBackgroundJobById(String(req.params.id));
@@ -496,6 +517,9 @@ router.post("/jobs/:id/retry", async (req: AuthenticatedRequest, res) => {
 
   void runBusinessIntelligenceJobAsync(job.id);
   res.status(202).json({ job: updated, executionMode: "background" });
+  } catch (err) {
+    sendJobFailure(res, err);
+  }
 });
 
 router.post("/jobs/:id/cancel", (req: AuthenticatedRequest, res) => {
