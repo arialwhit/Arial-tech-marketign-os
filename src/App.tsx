@@ -438,6 +438,24 @@ function OnboardingFlow({
           step: Math.min(step, 6),
         }),
       );
+      if (authUser?.uid) {
+        localStorage.setItem(
+          `mos-onboarding-draft-v1:${authUser.uid}`,
+          JSON.stringify({
+            name,
+            url,
+            industry,
+            companySize,
+            description,
+            location,
+            targetCountries,
+            selectedProducts,
+            selectedObjectives,
+            selectedChannels,
+            step: Math.min(step, 6),
+          }),
+        );
+      }
     } catch {
       // Ignore storage quota errors
     }
@@ -454,7 +472,12 @@ function OnboardingFlow({
     selectedObjectives,
     selectedChannels,
     step,
+    authUser,
   ]);
+
+  useEffect(() => {
+    if (authUser && step === 0 && !canCancel) setStep(1);
+  }, [authUser, canCancel, step]);
 
   const businessReady =
     name.trim().length > 1 &&
@@ -1380,8 +1403,12 @@ export default function App() {
       Boolean(ws.onboarded) ||
       ((ws.name || "").trim().length > 1 &&
         ((ws.websiteUrl || "").trim().length > 3 ||
-          (ws.description || "").trim().length >= 20 ||
-          (ws.products || []).length > 0));
+          (ws.description || "").trim().length >= 12 ||
+          (ws.positioning || "").trim().length >= 12 ||
+          (ws.valueProposition || "").trim().length >= 12 ||
+          (ws.products || []).length > 0 ||
+          (ws.objectives || []).length > 0 ||
+          (ws.channels || []).length > 0));
     if (established && !onboarded && !creatingNewWorkspace) {
       setOnboarded(true);
       localStorage.setItem("mos-onboarded", "yes");
@@ -1661,8 +1688,12 @@ export default function App() {
     Boolean(mos.workspace.onboarded) ||
     ((mos.workspace.name || "").trim().length > 1 &&
       ((mos.workspace.websiteUrl || "").trim().length > 3 ||
-        (mos.workspace.description || "").trim().length >= 20 ||
-        (mos.workspace.products || []).length > 0));
+        (mos.workspace.description || "").trim().length >= 12 ||
+        (mos.workspace.positioning || "").trim().length >= 12 ||
+        (mos.workspace.valueProposition || "").trim().length >= 12 ||
+        (mos.workspace.products || []).length > 0 ||
+        (mos.workspace.objectives || []).length > 0 ||
+        (mos.workspace.channels || []).length > 0));
 
   if (creatingNewWorkspace || (!onboarded && !savedBusiness)) {
     return (

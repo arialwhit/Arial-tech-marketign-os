@@ -8,6 +8,7 @@ import {
   getDocs,
   onSnapshot,
   query,
+  limit,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -69,9 +70,64 @@ function workspaceIsEstablished(ws: Partial<WorkspaceProfile> | null | undefined
   const name = (ws.name || "").trim();
   const hasBusiness =
     (ws.websiteUrl || "").trim().length > 3 ||
-    (ws.description || "").trim().length >= 20 ||
-    (ws.products || []).length > 0;
+    (ws.description || "").trim().length >= 12 ||
+    (ws.positioning || "").trim().length >= 12 ||
+    (ws.valueProposition || "").trim().length >= 12 ||
+    (ws.brandVoiceNotes || "").trim().length >= 12 ||
+    (ws.products || []).length > 0 ||
+    (ws.objectives || []).length > 0 ||
+    (ws.channels || []).length > 0;
   return Boolean(ws.onboarded) || (name.length > 1 && hasBusiness);
+}
+
+function readDraftWorkspace(uid: string): WorkspaceProfile | null {
+  const keys = [`mos-onboarding-draft-v1:${uid}`, "mos-onboarding-draft-v1"];
+  for (const key of keys) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      const draft = JSON.parse(raw) as {
+        name?: string;
+        url?: string;
+        industry?: string;
+        companySize?: string;
+        description?: string;
+        location?: string;
+        targetCountries?: string;
+        selectedProducts?: string[];
+        selectedObjectives?: string[];
+        selectedChannels?: string[];
+      };
+      const name = (draft.name || "").trim();
+      const websiteUrl = (draft.url || "").trim();
+      const description = (draft.description || "").trim();
+      const products = draft.selectedProducts || [];
+      if (name.length < 2) continue;
+      if (websiteUrl.length < 4 && description.length < 12 && products.length === 0) continue;
+      const base = createDefaultWorkspace(uid);
+      const stableId = `ws-${uid.replace(/[^a-zA-Z0-9]/g, "").slice(0, 18) || "acct"}-primary`;
+      return {
+        ...base,
+        id: stableId,
+        ownerId: uid,
+        name,
+        websiteUrl,
+        industry: draft.industry || base.industry,
+        companySize: draft.companySize || base.companySize,
+        description,
+        location: draft.location || "",
+        targetCountries: draft.targetCountries || "",
+        products,
+        objectives: draft.selectedObjectives || [],
+        channels: draft.selectedChannels || [],
+        onboarded: true,
+        isDemo: false,
+      };
+    } catch {
+      // Ignore a damaged draft and try the next key.
+    }
+  }
+  return null;
 }
 
 function readAccountWorkspace(uid: string): WorkspaceProfile | null {
@@ -873,38 +929,94 @@ export function useMarketingOS() {
           return;
         }
 
-        if (list.some((w) => w.id === curWs.id)) {
-          finish();
-          return;
-        }
+        void (async () => {
+          let opened = false;
+          try {
+            const activeId = (savedActiveWorkspaceIdRef.current || localPref).replace(/[^a-zA-Z0-9_-]/g, "");
+            if (activeId && !list.some((w) => w.id === activeId && workspaceIsEstablished(w))) {
+              const direct = await getDoc(doc(db, "workspaces", activeId));
+              if (direct.exists()) {
+                const ws = { ...(direct.data() as WorkspaceProfile), id: direct.id };
+                if (ws.ownerId === authUser.uid && workspaceIsEstablished(ws)) {
+                  openEstablished(ws);
+                  opened = true;
+                  return;
+                }
+              }
+            }
 
-        if (isGoogleSignedInUser(authUser) && autoProvisionedForUidRef.current !== authUser.uid) {
-          autoProvisionedForUidRef.current = authUser.uid;
-          const emailPrefix = authUser.email?.split("@")[0] || "";
-          const derivedName =
-            curWs.name.trim() ||
-            (authUser.displayName ? `${authUser.displayName}'s Workspace` : "") ||
-            (emailPrefix ? `${emailPrefix} Workspace` : "My Marketing Workspace");
-          const base = createDefaultWorkspace(authUser.uid);
-          const autoWs: WorkspaceProfile = {
-            ...base,
-            ...curWs,
-            id: curWs.id || base.id,
-            ownerId: authUser.uid,
-            name: derivedName,
-            onboarded: false,
-            isDemo: false,
-            credits: 10000,
-          };
-          restoreWorkspaceSession(autoWs);
-          void persistWorkspaceToCloud(autoWs, undefined, authUser).then(() =>
-            syncUserActiveWorkspace(authUser.uid, autoWs.id),
-          );
-        }
-        finish();
+            const drafted = readDraftWorkspace(authUser.uid);
+            if (drafted) {
+              openEstablished(drafted);
+              opened = true;
+              return;
+            }
+
+            for (const ws of list) {
+              const cleanId = (ws.id || "").replace(/[^a-zA-Z0-9_-]/g, "");
+              if (!cleanId) continue;
+              const items = await getDocs(
+                query(
+                  collection(db, "workspaces", cleanId, "items"),
+                  where("ownerId", "==", authUser.uid),
+                  limit(8),
+                ),
+              );
+              const hasSavedWork = items.docs.some((item) => {
+                const kind = String(item.data().kind || "");
+                return ["strategy", "project", "session", "calendar_post", "media_asset", "notebook"].includes(kind);
+              });
+              if (hasSavedWork) {
+                openEstablished(ws);
+                opened = true;
+                return;
+              }
+            }
+          } catch (err) {
+            console.warn("Saved workspace lookup note:", err);
+          } finally {
+            if (!opened) {
+              const remembered = readDraftWorkspace(authUser.uid) || readAccountWorkspace(authUser.uid);
+              if (remembered && workspaceIsEstablished(remembered)) {
+                openEstablished(remembered);
+                opened = true;
+              }
+            }
+            if (
+              !opened &&
+              list.length === 0 &&
+              !workspaceIsEstablished(latestWorkspaceRef.current) &&
+              isGoogleSignedInUser(authUser) &&
+              autoProvisionedForUidRef.current !== authUser.uid
+            ) {
+              autoProvisionedForUidRef.current = authUser.uid;
+              const emailPrefix = authUser.email?.split("@")[0] || "";
+              const derivedName =
+                curWs.name.trim() ||
+                (authUser.displayName ? `${authUser.displayName}'s Workspace` : "") ||
+                (emailPrefix ? `${emailPrefix} Workspace` : "My Marketing Workspace");
+              const base = createDefaultWorkspace(authUser.uid);
+              const autoWs: WorkspaceProfile = {
+                ...base,
+                ...curWs,
+                id: curWs.id || base.id,
+                ownerId: authUser.uid,
+                name: derivedName,
+                onboarded: false,
+                isDemo: false,
+                credits: 10000,
+              };
+              restoreWorkspaceSession(autoWs);
+              void persistWorkspaceToCloud(autoWs, undefined, authUser).then(() =>
+                syncUserActiveWorkspace(authUser.uid, autoWs.id),
+              );
+            }
+            finish();
+          }
+        })();
       },
       (error) => {
-        const saved = readAccountWorkspace(authUser.uid);
+        const saved = readAccountWorkspace(authUser.uid) || readDraftWorkspace(authUser.uid);
         if (saved && workspaceIsEstablished(saved)) {
           restoreWorkspaceSession({
             ...saved,
@@ -1343,7 +1455,6 @@ export function useMarketingOS() {
     setActiveWorkspaceHeaderId("default");
     localStorage.removeItem(LOCAL_STORAGE_KEY);
     localStorage.removeItem("mos-onboarded");
-    localStorage.removeItem("mos-onboarding-draft-v1");
     localStorage.removeItem("mos-active-bi-job-id");
     localStorage.removeItem("mos-approved");
     savedActiveWorkspaceIdRef.current = "";
